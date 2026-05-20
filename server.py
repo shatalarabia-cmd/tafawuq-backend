@@ -36,7 +36,7 @@ app = FastAPI(title="Tafawuq API", version="1.0.0")
 api_router = APIRouter(prefix="/api")
 
 # إعداد CORS
-aapp.add_middleware(
+app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # ✅ يسمح من أي مكان
     allow_credentials=True,
