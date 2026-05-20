@@ -2,16 +2,18 @@
 Backend Server لتطبيق تفوق التعليمي
 Tafawuq Educational App Backend Server
 """
-
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 from pathlib import Path
 from typing import List, Optional
+from datetime import datetime, timedelta
 import os
 import logging
 import uuid
+import traceback
 
 # استيراد النماذج والمصادقة
 from models import *
@@ -27,9 +29,14 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 # إعداد MongoDB
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ.get('DB_NAME', 'tafawuq_db')]
+try:
+    mongo_url = os.environ['MONGO_URL']
+    client = AsyncIOMotorClient(mongo_url)
+    db = client[os.environ.get('DB_NAME', 'tafawuq_db')]
+except KeyError:
+    raise RuntimeError("MONGO_URL not found in environment variables!")
+except Exception as e:
+    raise RuntimeError(f"Failed to connect to MongoDB: {e}")
 
 # إنشاء التطبيق
 app = FastAPI(title="Tafawuq API", version="1.0.0")
@@ -38,11 +45,23 @@ api_router = APIRouter(prefix="/api")
 # إعداد CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # ✅ يسمح من أي مكان
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# معالج الأخطاء العام (بعد إنشاء app)
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """معالج أخطاء عام لرؤية الأخطاء بوضوح"""
+    error_detail = str(exc)
+    traceback_str = traceback.format_exc()
+    logger.error(f"ERROR: {error_detail}\n{traceback_str}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": error_detail, "traceback": traceback_str}
+    )
 
 # إعداد السجلات
 logging.basicConfig(
