@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from pathlib import Path
 import os
 import sys
+import certifi
 
 # إضافة المسار للنماذج
 sys.path.append(str(Path(__file__).parent))
@@ -22,8 +23,7 @@ load_dotenv(ROOT_DIR / '.env')
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ.get('DB_NAME', 'tafawuq_db')]
+client = AsyncIOMotorClient(mongo_url, tlsCAFile=certifi.where()) # 👈 أضفنا التعديل هناdb = client[os.environ.get('DB_NAME', 'tafawuq_db')]
 
 
 def generate_id():
