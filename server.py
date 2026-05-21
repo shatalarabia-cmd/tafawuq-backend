@@ -15,6 +15,7 @@ import os
 import logging
 import uuid
 import traceback
+import certifi
 
 # استيراد النماذج والمصادقة
 from models import *
@@ -29,10 +30,14 @@ from auth import (
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# إعداد MongoDB
+# إعداد MongoDB النظيف والآمن للسحاب
 try:
     mongo_url = os.environ['MONGO_URL']
-    client = AsyncIOMotorClient(mongo_url)
+    client = AsyncIOMotorClient(
+        mongo_url,
+        tlsCAFile=certifi.where(),
+        tlsAllowInvalidCertificates=True
+    )
     db = client[os.environ.get('DB_NAME', 'tafawuq_db')]
 except KeyError:
     raise RuntimeError("MONGO_URL not found in environment variables!")
