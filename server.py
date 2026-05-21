@@ -42,7 +42,21 @@ except Exception as e:
 # إنشاء التطبيق
 app = FastAPI(title="Tafawuq API", version="1.0.0")
 api_router = APIRouter(prefix="/api")
-
+# استدعاء دالة إضافة البيانات عند بدء تشغيل السيرفر تلقائياً
+@app.on_event("startup")
+async def startup_event():
+    try:
+        # الفحص إذا كان هناك مستخدمين في قاعدة البيانات
+        user_count = await db.users.count_documents({})
+        if user_count == 0:
+            print("📭 قاعدة البيانات فارغة! جاري تشغيل seed_data تلقائياً...")
+            from seed_data import seed_database
+            await seed_database()
+            print("✅ تم تجهيز البيانات التجريبية بنجاح!")
+        else:
+            print(f"📊 قاعدة البيانات تحتوي على {user_count} مستخدمين بالفعل. لن يتم التكرار.")
+    except Exception as e:
+        print(f"❌ خطأ أثناء فحص البيانات التجريبية: {e}")
 # إعداد CORS
 app.add_middleware(
     CORSMiddleware,
