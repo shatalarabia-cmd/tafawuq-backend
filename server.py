@@ -10,7 +10,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 from pathlib import Path
 from typing import List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime
 import os
 import logging
 import uuid
@@ -30,7 +30,7 @@ from auth import (
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# إعداد MongoDB النظيف والآمن للسحاب
+# إعداد MongoDB
 try:
     mongo_url = os.environ['MONGO_URL']
     client = AsyncIOMotorClient(
@@ -39,29 +39,20 @@ try:
         tlsAllowInvalidCertificates=True
     )
     db = client[os.environ.get('DB_NAME', 'tafawuq_db')]
-except KeyError:
-    raise RuntimeError("MONGO_URL not found in environment variables!")
 except Exception as e:
     raise RuntimeError(f"Failed to connect to MongoDB: {e}")
 
-# إنشاء التطبيق
 app = FastAPI(title="Tafawuq API", version="1.0.0")
+@app.get("/debug/routes")
+async def get_routes():
+    # هذا سيعرض لنا كل الروابط التي يعترف بها السيرفر حالياً
+    return {"routes": [route.path for route in app.routes]}
 api_router = APIRouter(prefix="/api")
-# استدعاء دالة إضافة البيانات عند بدء تشغيل السيرفر تلقائياً
-@app.on_event("startup")
-async def startup_event():
-    try:
-        # الفحص إذا كان هناك مستخدمين في قاعدة البيانات
-        user_count = await db.users.count_documents({})
-        if user_count == 0:
-            print("📭 قاعدة البيانات فارغة! جاري تشغيل seed_data تلقائياً...")
-            from seed_data import seed_database
-            await seed_database()
-            print("✅ تم تجهيز البيانات التجريبية بنجاح!")
-        else:
-            print(f"📊 قاعدة البيانات تحتوي على {user_count} مستخدمين بالفعل. لن يتم التكرار.")
-    except Exception as e:
-        print(f"❌ خطأ أثناء فحص البيانات التجريبية: {e}")
+
+# إعداد السجلات
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # إعداد CORS
 app.add_middleware(
     CORSMiddleware,
@@ -71,74 +62,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# معالج الأخطاء العام (بعد إنشاء app)
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    """معالج أخطاء عام لرؤية الأخطاء بوضوح"""
-    error_detail = str(exc)
-    traceback_str = traceback.format_exc()
-    logger.error(f"ERROR: {error_detail}\n{traceback_str}")
-    return JSONResponse(
-        status_code=500,
-        content={"detail": error_detail, "traceback": traceback_str}
-    )
-
-# إعداد السجلات
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
 # ===== Helper Functions =====
-
 def generate_id() -> str:
-    """توليد معرف فريد"""
     return str(uuid.uuid4())
 
-async def get_user_by_id(user_id: str) -> Optional[UserInDB]:
-    """الحصول على المستخدم من قاعدة البيانات"""
-    user_data = await db.users.find_one({"id": user_id})
-    if user_data:
-        return UserInDB(**user_data)
-    return None
-
 async def get_user_by_email(email: str) -> Optional[UserInDB]:
-    """الحصول على المستخدم من خلال البريد الإلكتروني"""
     user_data = await db.users.find_one({"email": email})
-    if user_data:
-        return UserInDB(**user_data)
-    return None
+    return UserInDB(**user_data) if user_data else None
 
 # ===== Authentication Routes =====
 
-@api_router.post("/auth/register", response_model=Token, status_code=status.HTTP_201_CREATED)
+@api_router.post("/auth/register", status_code=status.HTTP_201_CREATED)
 async def register(user_data: UserCreate):
-    """تسجيل مستخدم جديد"""
+    """تسجيل مستخدم جديد مع إنشاء سجل تقدم"""
     try:
-        logger.info(f"Register attempt: {user_data.email}")
-
-        # التحقق من وجود المستخدم
         existing_user = await get_user_by_email(user_data.email)
         if existing_user:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="البريد الإلكتروني مستخدم بالفعل"
-            )
+            raise HTTPException(status_code=400, detail="هذا البريد الإلكتروني مسجل مسبقاً")
 
-        # إنشاء المستخدم
         user_id = generate_id()
+        now = datetime.utcnow()
         hashed_password = get_password_hash(user_data.password)
 
-        # استخدام القيم الافتراضية إذا لم تُرسل
-        now = datetime.utcnow()
         user_in_db = UserInDB(
             id=user_id,
             email=user_data.email,
             full_name=user_data.full_name,
-            role=user_data.role or UserRole.STUDENT,  # افتراضي: طالب
+            role=user_data.role or UserRole.STUDENT,
             grade=user_data.grade,
-            subscription_type=user_data.subscription_type or SubscriptionType.FREE,  # افتراضي: مجاني
+            subscription_type=user_data.subscription_type or SubscriptionType.FREE,
             profile_image=user_data.profile_image,
             hashed_password=hashed_password,
             created_at=now,
@@ -146,7 +98,6 @@ async def register(user_data: UserCreate):
         )
 
         await db.users.insert_one(user_in_db.dict())
-        logger.info(f"User created: {user_id}")
 
         # إنشاء سجل التقدم للطالب
         if user_in_db.role == UserRole.STUDENT:
@@ -157,89 +108,49 @@ async def register(user_data: UserCreate):
                 bookmarked_lesson_ids=[]
             )
             await db.user_progress.insert_one(progress.dict())
-            logger.info(f"Progress created for student: {user_id}")
 
-        # إنشاء الرمز
-        access_token = create_user_token(user_id, user_data.email)
+        # الرد للفرونت اند برسالة نجاح
+        return {"message": "تم التسجيل بنجاح، يمكنك الآن تسجيل الدخول"}
 
-        user_response = UserResponse(
-            id=user_in_db.id,
-            email=user_in_db.email,
-            full_name=user_in_db.full_name,
-            role=user_in_db.role,
-            grade=user_in_db.grade,
-            subscription_type=user_in_db.subscription_type,
-            profile_image=user_in_db.profile_image,
-            created_at=user_in_db.created_at,
-            updated_at=user_in_db.updated_at
-        )
-
-        logger.info(f"Register successful: {user_id}")
-        return Token(access_token=access_token, user=user_response)
-
-    except HTTPException:
-        raise
+    except HTTPException as he:
+        raise he
     except Exception as e:
         logger.error(f"Register error: {e}")
-        logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=f"خطأ في التسجيل: {str(e)}")
-
+        raise HTTPException(status_code=500, detail="حدث خطأ أثناء التسجيل")
 
 @api_router.post("/auth/login", response_model=Token)
 async def login(credentials: UserLogin):
-    """تسجيل الدخول"""
+    user = await get_user_by_email(credentials.email)
+    if not user or not verify_password(credentials.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="البريد أو كلمة المرور غير صحيحة")
+
+    access_token = create_user_token(user.id, user.email)
+    return Token(access_token=access_token, user=UserResponse(**user.dict()))
+    # ===== Admin Routes =====
+
+@api_router.get("/admin/students")
+async def get_all_students():
+    """جلب قائمة جميع الطلاب (للمدير)"""
     try:
-        logger.info(f"Login attempt: {credentials.email}")
-
-        user = await get_user_by_email(credentials.email)
-
-        if not user or not verify_password(credentials.password, user.hashed_password):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="البريد الإلكتروني أو كلمة المرور غير صحيحة"
-            )
-
-        access_token = create_user_token(user.id, user.email)
-
-        user_response = UserResponse(
-            id=user.id,
-            email=user.email,
-            full_name=user.full_name,
-            role=user.role,
-            grade=user.grade,
-            subscription_type=user.subscription_type,
-            profile_image=user.profile_image,
-            created_at=user.created_at,
-            updated_at=user.updated_at
-        )
-
-        logger.info(f"Login successful: {user.id}")
-        return Token(access_token=access_token, user=user_response)
-
-    except HTTPException:
-        raise
+        students = await db.users.find({"role": "student"}).to_list(length=100)
+        # تحويل المعرفات لـ string لتجنب مشاكل JSON
+        for student in students:
+            student["_id"] = str(student["_id"])
+        return students
     except Exception as e:
-        logger.error(f"Login error: {e}")
-        logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=f"خطأ في تسجيل الدخول: {str(e)}")
+        logger.error(f"Error fetching students: {e}")
+        raise HTTPException(status_code=500, detail="خطأ في جلب بيانات الطلاب")
 
+@api_router.get("/subjects")
+async def get_subjects():
+    """جلب قائمة المواد التعليمية"""
+    try:
+        subjects = await db.subjects.find().to_list(length=100)
+        for subject in subjects:
+            subject["_id"] = str(subject["_id"])
+        return subjects
+    except Exception as e:
+        logger.error(f"Error fetching subjects: {e}")
+        raise HTTPException(status_code=500, detail="خطأ في جلب المواد")
 
-@api_router.get("/auth/me", response_model=UserResponse)
-async def get_current_user(user_id: str = Depends(get_current_user_id)):
-    """الحصول على بيانات المستخدم الحالي"""
-    user = await get_user_by_id(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="المستخدم غير موجود")
-
-    return UserResponse(
-        id=user.id,
-        email=user.email,
-        full_name=user.full_name,
-        role=user.role,
-        grade=user.grade,
-        subscription_type=user.subscription_type,
-        profile_image=user.profile_image,
-        created_at=user.created_at,
-        updated_at=user.updated_at
-    )
 app.include_router(api_router)
